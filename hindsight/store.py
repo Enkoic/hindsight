@@ -116,3 +116,22 @@ class Store:
         )
         row = cur.fetchone()
         return row["content"] if row else None
+
+    def events_in_range(self, start_day: date, end_day: date) -> list[sqlite3.Row]:
+        start = datetime.combine(start_day, time.min, tzinfo=timezone.utc).isoformat()
+        end = datetime.combine(end_day, time.max, tzinfo=timezone.utc).isoformat()
+        cur = self._conn.execute(
+            "SELECT * FROM events WHERE ts_start >= ? AND ts_start <= ? ORDER BY ts_start",
+            (start, end),
+        )
+        return list(cur.fetchall())
+
+    def summaries_in_range(
+        self, start_day: date, end_day: date, provider: str, model: str
+    ) -> list[tuple[date, str]]:
+        cur = self._conn.execute(
+            "SELECT day, content FROM summaries "
+            "WHERE day >= ? AND day <= ? AND provider = ? AND model = ? ORDER BY day",
+            (start_day.isoformat(), end_day.isoformat(), provider, model),
+        )
+        return [(date.fromisoformat(r["day"]), r["content"]) for r in cur.fetchall()]

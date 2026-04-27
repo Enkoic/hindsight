@@ -32,6 +32,31 @@ Output must be valid Markdown with these sections (keep exact order):
 ## 备注 / Notes
 """
 
+ROLLUP_SYSTEM_PROMPT = """You are a personal activity analyst producing a multi-day rollup
+(weekly or monthly). The user gives you a sequence of already-written daily digests for
+consecutive days. Your job is to synthesize them — not concatenate them — into a higher-
+order narrative that highlights what only becomes visible across days.
+
+Focus on:
+1. Multi-day initiatives & projects (where time was actually invested).
+2. Throughlines & decisions: choices made earlier that played out later.
+3. Recurring blockers, debt, or unanswered questions still open at the end.
+4. What's clearly *finished* vs *abandoned* vs *still in flight*.
+5. Patterns in tool/AI usage, time-of-day rhythms if obvious.
+
+Write in the user's language. Be concrete and reference dates. Skip trivial details that
+appeared in only one day if they were resolved that same day. Output must be valid Markdown
+with these sections (keep order):
+
+## 总览 / Rollup Overview
+## 主线项目 / Major Threads
+## 已完成 / Completed
+## 进行中 / Still In Flight
+## 未决 & 风险 / Open Questions & Risk
+## 关键决策与洞察 / Decisions & Insights
+## 度量速记 / Quick Stats
+"""
+
 
 def render_digest(events: Iterable[sqlite3.Row], day: date) -> str:
     """Compact the events list into a digest the LLM can actually reason over."""
@@ -171,7 +196,10 @@ class Summarizer(ABC):
     model: str
 
     @abstractmethod
-    def summarize(self, digest: str, day: date) -> str: ...
+    def complete(self, system: str, user: str, max_tokens: int = 4096) -> str: ...
+
+    def summarize(self, digest: str, day: date) -> str:
+        return self.complete(SYSTEM_PROMPT, f"Date: {day.isoformat()}\n\n{digest}")
 
 
 class AnthropicSummarizer(Summarizer):
@@ -182,23 +210,16 @@ class AnthropicSummarizer(Summarizer):
         self.client = Anthropic(api_key=api_key)
         self.model = model
 
-    def summarize(self, digest: str, day: date) -> str:
+    def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
         msg = self.client.messages.create(
             model=self.model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Date: {day.isoformat()}\n\n{digest}",
-                }
-            ],
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
         )
-        out_parts: list[str] = []
-        for block in msg.content:
-            if getattr(block, "type", "") == "text":
-                out_parts.append(block.text)
-        return "\n".join(out_parts).strip()
+        return "\n".join(
+            block.text for block in msg.content if getattr(block, "type", "") == "text"
+        ).strip()
 
 
 class OpenAISummarizer(Summarizer):
@@ -209,15 +230,39 @@ class OpenAISummarizer(Summarizer):
         self.client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
         self.model = model
 
-    def summarize(self, digest: str, day: date) -> str:
+    def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
         resp = self.client.chat.completions.create(
             model=self.model,
+            max_tokens=max_tokens,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Date: {day.isoformat()}\n\n{digest}"},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
             ],
         )
         return (resp.choices[0].message.content or "").strip()
+
+
+def render_rollup_digest(daily_summaries: list[tuple[date, str]]) -> str:
+    """Concatenate cached daily summaries into a single payload for the rollup LLM call."""
+    lines: list[str] = []
+    for day, content in daily_summaries:
+        lines.append(f"\n=========================\n# {day.isoformat()}\n=========================\n")
+        lines.append(content.strip())
+    return "\n".join(lines).strip()
+
+
+def summarize_rollup(
+    summarizer: Summarizer,
+    daily_summaries: list[tuple[date, str]],
+    start_day: date,
+    end_day: date,
+) -> str:
+    digest = render_rollup_digest(daily_summaries)
+    user = (
+        f"Period: {start_day.isoformat()} … {end_day.isoformat()} "
+        f"({len(daily_summaries)} days with cached summaries)\n\n{digest}"
+    )
+    return summarizer.complete(ROLLUP_SYSTEM_PROMPT, user, max_tokens=6000)
 
 
 def build_summarizer(cfg: Config) -> Summarizer:

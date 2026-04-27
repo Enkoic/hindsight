@@ -20,6 +20,8 @@ Personal activity is fragmented across many tools. Each one has its own log form
 | Claude Code — history | `~/.claude/history.jsonl` | every prompt you typed (project-tagged) |
 | Codex CLI — sessions | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | session rollouts |
 | Codex CLI — history | `~/.codex/history.jsonl` | every prompt you typed |
+| Cursor IDE | `~/Library/Application Support/Cursor/User/workspaceStorage/*/state.vscdb` | per-workspace `aiService.generations` + composer threads |
+| ChatGPT export | `<export>/conversations.json` | OpenAI data-export conversations (point at the unzipped folder) |
 | _(pluggable)_ | your collector | subclass `Collector` |
 
 Adding a new source = one file under `hindsight/collectors/` that yields `Event` objects.
@@ -57,12 +59,34 @@ hindsight summarize --day today
 hindsight export markdown --day today      # ./out/2026-04-22.md
 hindsight export json     --day today      # ./out/2026-04-22.json
 hindsight export notion   --day today      # new page in your Notion DB
+hindsight export obsidian --day today      # daily note in your Obsidian vault
 
 # one-shot: collect → summarize → export markdown
 hindsight run --day today --targets markdown,notion
 ```
 
 `--day` accepts `today`, `yesterday`, or an ISO date (`2026-04-22`).
+
+### Weekly / monthly rollup
+
+`rollup` synthesizes already-cached daily summaries into a multi-day narrative — throughlines, finished vs in-flight, recurring blockers — instead of just concatenating them.
+
+```bash
+hindsight rollup --week 2026-W17                   # ISO week
+hindsight rollup --month 2026-04                   # full month
+hindsight rollup --since 2026-04-20 --until 2026-04-26
+hindsight rollup --week 2026-W17 --fill-missing    # auto-summarize any uncached day in range first
+```
+
+### Run on a daily schedule (macOS)
+
+```bash
+hindsight schedule install --hour 23 --minute 0 --targets markdown,obsidian
+hindsight schedule show       # prints the LaunchAgent plist path
+hindsight schedule uninstall
+```
+
+`schedule install` writes a launchd plist at `~/Library/LaunchAgents/io.github.enkoic.hindsight.plist` that runs `hindsight run --day yesterday` daily. Logs land in `~/Library/Logs/hindsight/`.
 
 ## Notion setup
 
@@ -132,11 +156,13 @@ The data dir is created with mode `0700` and the DB file with `0600` — raw tra
 
 ## Roadmap
 
-- [ ] Cursor / VS Code chat collector
-- [ ] ChatGPT export (`conversations.json`) collector
-- [ ] Weekly / monthly rollup summaries
-- [ ] Obsidian exporter
-- [ ] Watch mode (continuous collect + daily cron summarize)
+- [x] Cursor IDE chat collector
+- [x] ChatGPT export (`conversations.json`) collector
+- [x] Weekly / monthly rollup summaries
+- [x] Obsidian exporter
+- [x] Daily-cron mode (macOS launchd via `hindsight schedule`)
+- [ ] VS Code Copilot chat collector
+- [ ] Linux/systemd schedule helper
 
 ## License
 

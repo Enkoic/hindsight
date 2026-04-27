@@ -46,7 +46,22 @@ class Config:
     codex_sessions_dir: Path
     notion_token: str | None
     notion_database_id: str | None
+    obsidian_vault_dir: Path | None
+    cursor_storage_dir: Path | None
+    chatgpt_export_path: Path | None
     db_path: Path
+
+
+def _opt_path(env: str) -> Path | None:
+    raw = os.getenv(env)
+    return Path(os.path.expanduser(raw)) if raw else None
+
+
+def _default_cursor_dir() -> Path | None:
+    if os.uname().sysname == "Darwin":
+        p = Path.home() / "Library" / "Application Support" / "Cursor" / "User" / "workspaceStorage"
+        return p if p.exists() else None
+    return None
 
 
 def load() -> Config:
@@ -69,5 +84,8 @@ def load() -> Config:
         codex_sessions_dir=_path("CODEX_SESSIONS_DIR", "~/.codex/sessions"),
         notion_token=os.getenv("NOTION_TOKEN") or None,
         notion_database_id=os.getenv("NOTION_DATABASE_ID") or None,
+        obsidian_vault_dir=_opt_path("OBSIDIAN_VAULT_DIR"),
+        cursor_storage_dir=_opt_path("CURSOR_STORAGE_DIR") or _default_cursor_dir(),
+        chatgpt_export_path=_opt_path("CHATGPT_EXPORT_PATH"),
         db_path=db_path,
     )

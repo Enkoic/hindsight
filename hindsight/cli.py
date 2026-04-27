@@ -11,14 +11,22 @@ from rich.table import Table
 from . import config as config_mod
 from .collectors import (
     ActivityWatchCollector,
+    ChatGPTExportCollector,
     ClaudeCodeCollector,
     ClaudeHistoryCollector,
     CodexCollector,
     CodexHistoryCollector,
+    CursorCollector,
 )
-from .exporters import push_to_notion, write_json, write_markdown
+from .exporters import push_to_notion, write_json, write_markdown, write_obsidian
+from .schedule import macos_install, macos_uninstall, plist_path
 from .store import Store
-from .summarizer import build_summarizer, render_digest
+from .summarizer import (
+    build_summarizer,
+    render_digest,
+    render_rollup_digest,
+    summarize_rollup,
+)
 
 app = typer.Typer(add_completion=False, help="Aggregate and summarize your daily activity.")
 console = Console()
@@ -42,20 +50,27 @@ def _day_bounds(d: date) -> tuple[datetime, datetime]:
 def _collectors(cfg) -> list:
     claude_home = cfg.claude_projects_dir.parent
     codex_home = cfg.codex_sessions_dir.parent
-    return [
+    cs: list = [
         ActivityWatchCollector(cfg.aw_server_url),
         ClaudeCodeCollector(cfg.claude_projects_dir),
         ClaudeHistoryCollector(claude_home),
         CodexCollector(cfg.codex_sessions_dir),
         CodexHistoryCollector(codex_home),
     ]
+    if cfg.cursor_storage_dir:
+        cs.append(CursorCollector(cfg.cursor_storage_dir))
+    if cfg.chatgpt_export_path:
+        cs.append(ChatGPTExportCollector(cfg.chatgpt_export_path))
+    return cs
 
 
 @app.command()
 def collect(
     since: Optional[str] = typer.Option(None, help="ISO date or 'yesterday'. Default: last 2 days."),
     until: Optional[str] = typer.Option(None, help="ISO date. Default: now."),
-    sources: Optional[str] = typer.Option(None, help="Comma-separated subset: activitywatch,claude_code,codex"),
+    sources: Optional[str] = typer.Option(
+        None, help="Comma-separated subset of source names; default = all configured."
+    ),
 ):
     """Pull events from all sources into the local store."""
     cfg = config_mod.load()
@@ -89,9 +104,7 @@ def collect(
 
 
 @app.command()
-def report(
-    day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
-):
+def report(day: Optional[str] = typer.Option(None, help="ISO date. Default: today.")):
     """Terminal report of raw events for the day (no LLM)."""
     cfg = config_mod.load()
     d = _parse_day(day)
@@ -141,13 +154,90 @@ def summarize(
         store.close()
 
 
+def _resolve_range(
+    since: str | None, until: str | None, week: str | None, month: str | None
+) -> tuple[date, date]:
+    if week:
+        # ISO week: YYYY-Www, e.g. 2026-W17
+        try:
+            year_s, w_s = week.split("-W")
+            year = int(year_s)
+            wk = int(w_s)
+        except ValueError as e:
+            raise typer.BadParameter(f"week must be YYYY-Www, got {week!r}") from e
+        start = date.fromisocalendar(year, wk, 1)
+        end = date.fromisocalendar(year, wk, 7)
+        return start, end
+    if month:
+        try:
+            y, m = month.split("-")
+            start = date(int(y), int(m), 1)
+        except ValueError as e:
+            raise typer.BadParameter(f"month must be YYYY-MM, got {month!r}") from e
+        if start.month == 12:
+            end = date(start.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(start.year, start.month + 1, 1) - timedelta(days=1)
+        return start, end
+    if since and until:
+        return _parse_day(since), _parse_day(until)
+    raise typer.BadParameter("provide either --week, --month, or both --since and --until")
+
+
+@app.command()
+def rollup(
+    week: Optional[str] = typer.Option(None, help="ISO week, e.g. 2026-W17"),
+    month: Optional[str] = typer.Option(None, help="Month, e.g. 2026-04"),
+    since: Optional[str] = typer.Option(None, help="ISO start date (with --until)"),
+    until: Optional[str] = typer.Option(None, help="ISO end date (with --since)"),
+    fill_missing: bool = typer.Option(
+        False, help="Auto-summarize any day in range that doesn't have a cached summary yet."
+    ),
+):
+    """Synthesize a multi-day rollup from cached daily summaries."""
+    cfg = config_mod.load()
+    start, end = _resolve_range(since, until, week, month)
+    store = Store(cfg.db_path)
+    try:
+        if fill_missing:
+            summarizer = build_summarizer(cfg)
+            day = start
+            while day <= end:
+                if not store.get_summary(day, summarizer.provider, summarizer.model):
+                    rows = store.events_for_day(day)
+                    if rows:
+                        console.print(f"[cyan]filling[/cyan] {day} ({len(rows)} events)")
+                        digest = render_digest(rows, day)
+                        out = summarizer.summarize(digest, day)
+                        store.save_summary(day, summarizer.provider, summarizer.model, out)
+                day += timedelta(days=1)
+
+        dailies = store.summaries_in_range(start, end, cfg.llm_provider, cfg.llm_model)
+        if not dailies:
+            console.print(
+                f"[red]No cached daily summaries in {start}..{end}. "
+                "Run `hindsight summarize` per day or pass --fill-missing.[/red]"
+            )
+            raise typer.Exit(1)
+
+        summarizer = build_summarizer(cfg)
+        console.print(
+            f"[cyan]Rollup {start} .. {end}[/cyan] — {len(dailies)} daily summaries → "
+            f"{summarizer.provider}/{summarizer.model}"
+        )
+        out = summarize_rollup(summarizer, dailies, start, end)
+        console.print(out)
+    finally:
+        store.close()
+
+
 @app.command()
 def export(
-    target: str = typer.Argument(..., help="markdown | json | notion"),
+    target: str = typer.Argument(..., help="markdown | json | notion | obsidian"),
     day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
     out: Path = typer.Option(Path("./out"), help="Output directory (markdown/json)."),
 ):
-    """Export the cached summary to markdown / json / Notion."""
+    """Export the cached summary to markdown / json / Notion / Obsidian."""
     cfg = config_mod.load()
     d = _parse_day(day)
     store = Store(cfg.db_path)
@@ -170,6 +260,12 @@ def export(
                 raise typer.Exit(1)
             url = push_to_notion(cfg.notion_token, cfg.notion_database_id, d, summary)
             console.print(f"[green]pushed[/green] {url}")
+        elif target == "obsidian":
+            if not cfg.obsidian_vault_dir:
+                console.print("[red]OBSIDIAN_VAULT_DIR required.[/red]")
+                raise typer.Exit(1)
+            path = write_obsidian(cfg.obsidian_vault_dir, d, summary)
+            console.print(f"[green]wrote[/green] {path}")
         else:
             console.print(f"[red]Unknown target: {target}[/red]")
             raise typer.Exit(2)
@@ -180,13 +276,45 @@ def export(
 @app.command()
 def run(
     day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
-    targets: str = typer.Option("markdown", help="Comma-separated exports: markdown,json,notion"),
+    targets: str = typer.Option("markdown", help="Comma-separated exports: markdown,json,notion,obsidian"),
 ):
     """End-to-end: collect → summarize → export."""
     collect(since=day, until=day, sources=None)
     summarize(day=day, save_digest=False)
     for t in [s.strip() for s in targets.split(",") if s.strip()]:
         export(target=t, day=day, out=Path("./out"))
+
+
+schedule_app = typer.Typer(help="Install/remove a daily macOS LaunchAgent that runs hindsight.")
+app.add_typer(schedule_app, name="schedule")
+
+
+@schedule_app.command("install")
+def schedule_install(
+    hour: int = typer.Option(23, help="Hour (0-23) when the daily run fires."),
+    minute: int = typer.Option(0, help="Minute (0-59)."),
+    targets: str = typer.Option("markdown", help="Export targets passed to `hindsight run`."),
+):
+    """Install a macOS LaunchAgent that runs `hindsight run --day yesterday` daily."""
+    p = macos_install(hour=hour, minute=minute, targets=targets)
+    console.print(f"[green]installed[/green] {p}")
+    console.print("Run `launchctl list | grep hindsight` to verify.")
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall():
+    """Remove the LaunchAgent."""
+    p = macos_uninstall()
+    if p:
+        console.print(f"[green]removed[/green] {p}")
+    else:
+        console.print("[yellow]no LaunchAgent installed[/yellow]")
+
+
+@schedule_app.command("show")
+def schedule_show():
+    """Print the LaunchAgent plist path."""
+    console.print(str(plist_path()))
 
 
 if __name__ == "__main__":
