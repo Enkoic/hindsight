@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS summaries (
     content     TEXT NOT NULL,
     PRIMARY KEY (day, provider, model)
 );
+
+CREATE TABLE IF NOT EXISTS rollups (
+    start_day   TEXT NOT NULL,
+    end_day     TEXT NOT NULL,
+    provider    TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    PRIMARY KEY (start_day, end_day, provider, model)
+);
 """
 
 
@@ -135,3 +145,34 @@ class Store:
             (start_day.isoformat(), end_day.isoformat(), provider, model),
         )
         return [(date.fromisoformat(r["day"]), r["content"]) for r in cur.fetchall()]
+
+    def save_rollup(
+        self, start_day: date, end_day: date, provider: str, model: str, content: str
+    ) -> None:
+        with self.tx() as c:
+            c.execute(
+                """
+                INSERT OR REPLACE INTO rollups
+                    (start_day, end_day, provider, model, created_at, content)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    start_day.isoformat(),
+                    end_day.isoformat(),
+                    provider,
+                    model,
+                    datetime.now(timezone.utc).isoformat(),
+                    content,
+                ),
+            )
+
+    def get_rollup(
+        self, start_day: date, end_day: date, provider: str, model: str
+    ) -> str | None:
+        cur = self._conn.execute(
+            "SELECT content FROM rollups "
+            "WHERE start_day = ? AND end_day = ? AND provider = ? AND model = ?",
+            (start_day.isoformat(), end_day.isoformat(), provider, model),
+        )
+        row = cur.fetchone()
+        return row["content"] if row else None

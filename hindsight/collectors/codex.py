@@ -133,7 +133,3 @@ class CodexCollector(Collector):
                     out.append(str(block))
             return "\n".join(p for p in out if p)
         return str(content)
-
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)

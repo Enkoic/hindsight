@@ -2,12 +2,36 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from datetime import date, datetime
-from typing import Iterable
+from typing import Callable, Iterable, TypeVar
 
 from ..config import Config
+
+T = TypeVar("T")
+
+
+def _retry(fn: Callable[[], T], *, attempts: int = 3, base_delay: float = 1.5) -> T:
+    """Tiny retry helper for transient LLM failures (rate-limit, 5xx, network)."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 — provider SDKs raise wide types
+            last = e
+            msg = str(e).lower()
+            transient = any(
+                tok in msg
+                for tok in ("rate", "timeout", "timed out", "503", "502", "504", "overload", "temporar")
+            )
+            if not transient or i == attempts - 1:
+                raise
+            time.sleep(base_delay * (2**i))
+    if last:
+        raise last
+    raise RuntimeError("retry exhausted with no captured exception")
 
 SYSTEM_PROMPT = """You are a personal activity analyst. The user gives you raw events
 collected from multiple tools (ActivityWatch window/afk/web logs, Claude Code session
@@ -179,9 +203,49 @@ def render_digest(events: Iterable[sqlite3.Row], day: date) -> str:
                 lines.append(f"- …(+{len(prows) - 60} more)")
         lines.append("")
 
-    # Catch-all for other sources
+    cursor_rows = by_source.get("cursor", [])
+    if cursor_rows:
+        lines.append("## cursor")
+        by_project: dict[str, list[sqlite3.Row]] = defaultdict(list)
+        for r in cursor_rows:
+            by_project[r["project"] or "-"].append(r)
+        for proj, prows in by_project.items():
+            lines.append(f"### {proj}  ({len(prows)} entries)")
+            for r in prows[:30]:
+                t = datetime.fromisoformat(r["ts_start"]).strftime("%H:%M")
+                body = (r["body"] or "").strip().replace("\n", " ")
+                if not body:
+                    continue
+                lines.append(f"- {t} [{r['kind']}] {body[:260]}")
+            if len(prows) > 30:
+                lines.append(f"- …(+{len(prows) - 30} more)")
+        lines.append("")
+
+    chatgpt_rows = by_source.get("chatgpt", [])
+    if chatgpt_rows:
+        lines.append("## chatgpt (export)")
+        by_conv: dict[str, list[sqlite3.Row]] = defaultdict(list)
+        for r in chatgpt_rows:
+            by_conv[r["project"] or "-"].append(r)
+        for conv, crows in by_conv.items():
+            lines.append(f"### {conv}  ({len(crows)} messages)")
+            for r in crows[:20]:
+                t = datetime.fromisoformat(r["ts_start"]).strftime("%H:%M")
+                body = (r["body"] or "").strip().replace("\n", " ")
+                if not body:
+                    continue
+                lines.append(f"- {t} [{r['kind']}] {body[:260]}")
+            if len(crows) > 20:
+                lines.append(f"- …(+{len(crows) - 20} more)")
+        lines.append("")
+
+    handled = {
+        "activitywatch", "claude_code", "codex",
+        "claude_history", "codex_history",
+        "cursor", "chatgpt",
+    }
     for source, rows in by_source.items():
-        if source in {"activitywatch", "claude_code", "codex", "claude_history", "codex_history"}:
+        if source in handled:
             continue
         lines.append(f"## {source}")
         for r in rows[:50]:
@@ -211,11 +275,13 @@ class AnthropicSummarizer(Summarizer):
         self.model = model
 
     def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
-        msg = self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+        msg = _retry(
+            lambda: self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
         )
         return "\n".join(
             block.text for block in msg.content if getattr(block, "type", "") == "text"
@@ -231,13 +297,15 @@ class OpenAISummarizer(Summarizer):
         self.model = model
 
     def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+        resp = _retry(
+            lambda: self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
         )
         return (resp.choices[0].message.content or "").strip()
 

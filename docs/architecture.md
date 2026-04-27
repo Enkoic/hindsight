@@ -1,0 +1,100 @@
+# Architecture
+
+## High-level pipeline
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  collectors  │───▶│    Store     │───▶│  summarizer  │───▶ exporters
+│ (per source) │    │  (SQLite)    │    │ (LLM client) │
+└──────────────┘    └──────────────┘    └──────────────┘
+```
+
+Every layer trades in the same primitive — `Event` (`hindsight/models.py`). A collector emits `Event`s; the store deduplicates them by fingerprint; the summarizer renders a digest from rows in the store and asks an LLM to produce a Markdown narrative; the exporter writes the narrative to disk / Notion / Obsidian.
+
+The boundary between layers is intentionally narrow:
+
+| Layer | Output type | Knows about |
+| --- | --- | --- |
+| Collector | `Iterable[Event]` | one source's on-disk format |
+| Store | `sqlite3.Row` | events table, summary cache, rollup cache |
+| Summarizer | `str` (Markdown) | how to compress events into an LLM prompt |
+| Exporter | `Path` / URL | sink format (Notion blocks, Obsidian vault layout) |
+
+A new collector or a new exporter only touches *one* of those rows; the others don't change.
+
+## The Event schema
+
+Defined in `hindsight/models.py`:
+
+```python
+@dataclass
+class Event:
+    source: str              # "claude_code" | "cursor" | …
+    kind: str                # free-form sub-type within a source
+    ts_start: datetime       # **UTC**
+    ts_end: datetime | None  # UTC; None for point-in-time events
+    title: str               # short human-readable label (≤ 200 chars)
+    project: str | None      # cwd / project identifier when known
+    body: str                # full payload (e.g. message text)
+    meta: dict[str, Any]     # source-specific extras (session_id, urls, …)
+```
+
+### Time
+
+All timestamps are **UTC** at the schema boundary. Each collector is responsible for converting source-local timestamps to UTC. The CLI converts UTC back to local-day buckets when filtering by `--day`. Mixing timezones inside the store would silently break `events_for_day`.
+
+### Fingerprinting (dedup)
+
+`Event.fingerprint()` is `sha1(source, kind, ts_start.isoformat(), title, project, body[:256])`. Notably it excludes `meta` and ignores body content past 256 chars. The reason:
+
+- Re-collecting from a transcript that got *extended* (a session is still being written) shouldn't double-insert the earlier turns.
+- Adding `meta.duration_sec` on a re-pass shouldn't dirty the row.
+
+The store uses `INSERT OR IGNORE` keyed on `fingerprint`, so re-running `hindsight collect` is idempotent.
+
+## Storage
+
+`hindsight/store.py` owns three tables:
+
+| Table | Purpose |
+| --- | --- |
+| `events` | normalized events, `fingerprint` PK |
+| `summaries` | cached daily summaries keyed by `(day, provider, model)` |
+| `rollups` | cached multi-day summaries keyed by `(start_day, end_day, provider, model)` |
+
+The DB lives outside the repo at `~/Library/Application Support/hindsight/hindsight.sqlite` (macOS) / `$XDG_DATA_HOME/hindsight/` (Linux), with mode `0700/0600`. See `docs/configuration.md`.
+
+The cache key includes provider+model so switching from `deepseek-v3-2` to `claude-sonnet-4-6` produces a *new* row instead of overwriting; you can run both side by side and diff.
+
+## Summarizer
+
+Two stages:
+
+1. **`render_digest`** — pure Python. Compacts events into a structured Markdown document. ActivityWatch rows are aggregated into per-app minutes; Claude Code / Codex rows are grouped by session; memory / plan / task artefacts get their own section; histories are listed chronologically. The point is to get the LLM input down from "thousands of raw window switches" to "a paragraph per source".
+2. **`Summarizer.complete(system, user, max_tokens)`** — abstract over Anthropic and OpenAI-compatible endpoints. Two thin concrete classes; both wrap the call in `_retry()` to absorb rate limits and 5xx.
+
+Daily summarization uses `SYSTEM_PROMPT`. Rollup uses `ROLLUP_SYSTEM_PROMPT` and consumes already-cached daily summaries (not raw events) via `summarize_rollup`. That makes weekly/monthly cheap and avoids re-spending tokens on data the LLM has already seen.
+
+## CLI
+
+`hindsight/cli.py` is a Typer app. Each top-level command is a thin orchestrator:
+
+- `collect` → `_collectors(cfg)` → `Store.upsert_events`
+- `report` → `Store.events_for_day` → terminal table
+- `summarize` → `render_digest` → `Summarizer.complete` → `Store.save_summary`
+- `rollup` → `Store.summaries_in_range` → `summarize_rollup` → `Store.save_rollup`
+- `export <target>` → reads cached summary or rollup → exporter
+- `run` → orchestrates `collect → summarize → export`
+- `schedule install/uninstall/show` → macOS launchd glue
+
+`_resolve_range(--week / --month / --since/--until)` is shared by `rollup` and `export` so the same range syntax works in both places.
+
+## Schedule (macOS launchd)
+
+`hindsight/schedule.py` writes `~/Library/LaunchAgents/io.github.enkoic.hindsight.plist`, then tries `launchctl bootstrap gui/$UID …` (modern) and falls back to `launchctl load …` (legacy). The plist runs `hindsight run --day yesterday --targets <…>` daily at the configured time and pipes stdout/stderr to `~/Library/Logs/hindsight/`. Linux/systemd is on the roadmap.
+
+## What not to put in this repo
+
+- Raw transcripts: stay in the SQLite DB, never committed.
+- API keys: only in `.env` (git-ignored). `.env.example` is the public template.
+- Per-machine paths in code: derive at runtime from `XDG_DATA_HOME` / `os.uname()` / env vars.

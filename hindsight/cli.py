@@ -24,12 +24,22 @@ from .store import Store
 from .summarizer import (
     build_summarizer,
     render_digest,
-    render_rollup_digest,
     summarize_rollup,
 )
 
 app = typer.Typer(add_completion=False, help="Aggregate and summarize your daily activity.")
 console = Console()
+
+
+def _default_out_dir(cfg) -> Path:
+    """Default `export` output dir lives next to the SQLite store, not in cwd."""
+    return cfg.db_path.parent / "exports"
+
+
+KNOWN_SOURCES = {
+    "activitywatch", "claude_code", "claude_history",
+    "codex", "codex_history", "cursor", "chatgpt",
+}
 
 
 def _parse_day(s: str | None) -> date:
@@ -68,21 +78,36 @@ def _collectors(cfg) -> list:
 def collect(
     since: Optional[str] = typer.Option(None, help="ISO date or 'yesterday'. Default: last 2 days."),
     until: Optional[str] = typer.Option(None, help="ISO date. Default: now."),
+    days: Optional[int] = typer.Option(
+        None,
+        help="Shortcut: collect the last N days (overrides --since if both given).",
+    ),
     sources: Optional[str] = typer.Option(
-        None, help="Comma-separated subset of source names; default = all configured."
+        None,
+        help=f"Comma-separated subset of source names; default = all configured. "
+        f"Known: {sorted(KNOWN_SOURCES)}",
     ),
 ):
     """Pull events from all sources into the local store."""
     cfg = config_mod.load()
     store = Store(cfg.db_path)
     try:
-        if since:
+        now = datetime.now(timezone.utc)
+        if days is not None:
+            if days < 1:
+                raise typer.BadParameter("--days must be >= 1")
+            since_dt = now - timedelta(days=days)
+        elif since:
             since_dt, _ = _day_bounds(_parse_day(since))
         else:
-            since_dt = datetime.now(timezone.utc) - timedelta(days=2)
-        until_dt = _day_bounds(_parse_day(until))[1] if until else datetime.now(timezone.utc)
+            since_dt = now - timedelta(days=2)
+        until_dt = _day_bounds(_parse_day(until))[1] if until else now
 
         want = set(s.strip() for s in sources.split(",")) if sources else None
+        if want:
+            unknown = want - KNOWN_SOURCES
+            if unknown:
+                console.print(f"[yellow]warn:[/yellow] unknown source(s) {sorted(unknown)}")
         totals: dict[str, int] = {}
         for c in _collectors(cfg):
             if want and c.name not in want:
@@ -226,6 +251,7 @@ def rollup(
             f"{summarizer.provider}/{summarizer.model}"
         )
         out = summarize_rollup(summarizer, dailies, start, end)
+        store.save_rollup(start, end, summarizer.provider, summarizer.model, out)
         console.print(out)
     finally:
         store.close()
@@ -235,36 +261,73 @@ def rollup(
 def export(
     target: str = typer.Argument(..., help="markdown | json | notion | obsidian"),
     day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
-    out: Path = typer.Option(Path("./out"), help="Output directory (markdown/json)."),
+    week: Optional[str] = typer.Option(None, help="Export a cached rollup for this ISO week."),
+    month: Optional[str] = typer.Option(None, help="Export a cached rollup for this month."),
+    since: Optional[str] = typer.Option(None, help="Custom rollup range start (with --until)."),
+    until: Optional[str] = typer.Option(None, help="Custom rollup range end (with --since)."),
+    out: Optional[Path] = typer.Option(
+        None, help="Output dir (markdown/json). Default: <data-dir>/exports/."
+    ),
 ):
-    """Export the cached summary to markdown / json / Notion / Obsidian."""
+    """Export a cached daily summary or multi-day rollup."""
     cfg = config_mod.load()
-    d = _parse_day(day)
+    out_dir = out or _default_out_dir(cfg)
     store = Store(cfg.db_path)
     try:
-        summary = store.get_summary(d, cfg.llm_provider, cfg.llm_model)
-        if not summary:
-            console.print(f"[red]No summary for {d}. Run `hindsight summarize` first.[/red]")
-            raise typer.Exit(1)
+        is_rollup = bool(week or month or (since and until))
+        if is_rollup:
+            start, end = _resolve_range(since, until, week, month)
+            content = store.get_rollup(start, end, cfg.llm_provider, cfg.llm_model)
+            if not content:
+                console.print(
+                    f"[red]No cached rollup for {start}..{end}. "
+                    "Run `hindsight rollup` first.[/red]"
+                )
+                raise typer.Exit(1)
+            label = f"{start.isoformat()}_to_{end.isoformat()}"
+            d_for_export = end  # used for date-typed sinks (Notion / Obsidian frontmatter)
+        else:
+            d = _parse_day(day)
+            content = store.get_summary(d, cfg.llm_provider, cfg.llm_model)
+            if not content:
+                console.print(f"[red]No summary for {d}. Run `hindsight summarize` first.[/red]")
+                raise typer.Exit(1)
+            label = d.isoformat()
+            d_for_export = d
 
         if target == "markdown":
-            path = write_markdown(out, d, summary)
+            path = _write_markdown(out_dir, label, content)
             console.print(f"[green]wrote[/green] {path}")
         elif target == "json":
-            digest = render_digest(store.events_for_day(d), d)
-            path = write_json(out, d, summary, digest)
+            extra = (
+                None
+                if is_rollup
+                else render_digest(store.events_for_day(d_for_export), d_for_export)
+            )
+            path = _write_json(out_dir, label, content, extra)
             console.print(f"[green]wrote[/green] {path}")
         elif target == "notion":
             if not cfg.notion_token or not cfg.notion_database_id:
                 console.print("[red]NOTION_TOKEN and NOTION_DATABASE_ID required.[/red]")
                 raise typer.Exit(1)
-            url = push_to_notion(cfg.notion_token, cfg.notion_database_id, d, summary)
+            title_prefix = "Hindsight Rollup" if is_rollup else "Daily Digest"
+            url = push_to_notion(
+                cfg.notion_token,
+                cfg.notion_database_id,
+                d_for_export,
+                content,
+                title_prefix=title_prefix,
+            )
             console.print(f"[green]pushed[/green] {url}")
         elif target == "obsidian":
             if not cfg.obsidian_vault_dir:
                 console.print("[red]OBSIDIAN_VAULT_DIR required.[/red]")
                 raise typer.Exit(1)
-            path = write_obsidian(cfg.obsidian_vault_dir, d, summary)
+            subfolder = "Hindsight/Rollups" if is_rollup else "Hindsight"
+            tag = "hindsight-rollup" if is_rollup else "hindsight"
+            path = _write_obsidian_any(
+                cfg.obsidian_vault_dir, label, content, subfolder=subfolder, tag=tag
+            )
             console.print(f"[green]wrote[/green] {path}")
         else:
             console.print(f"[red]Unknown target: {target}[/red]")
@@ -273,16 +336,54 @@ def export(
         store.close()
 
 
+def _write_markdown(out_dir: Path, label: str, content: str) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{label}.md"
+    header = f"---\nlabel: {label}\n---\n\n# Hindsight — {label}\n\n"
+    path.write_text(header + content + "\n", encoding="utf-8")
+    return path
+
+
+def _write_json(out_dir: Path, label: str, content: str, raw_digest: str | None) -> Path:
+    import json as _json
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{label}.json"
+    payload = {"label": label, "summary": content, "raw_digest": raw_digest}
+    path.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _write_obsidian_any(
+    vault_dir: Path, label: str, content: str, subfolder: str, tag: str
+) -> Path:
+    target_dir = vault_dir / subfolder
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{label}.md"
+    fm = (
+        "---\n"
+        f"label: {label}\n"
+        f"tags: [{tag}]\n"
+        f"source: hindsight\n"
+        "---\n\n"
+    )
+    path.write_text(fm + f"# Hindsight — {label}\n\n{content}\n", encoding="utf-8")
+    return path
+
+
 @app.command()
 def run(
     day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
-    targets: str = typer.Option("markdown", help="Comma-separated exports: markdown,json,notion,obsidian"),
+    targets: str = typer.Option(
+        "markdown",
+        help="Comma-separated exports: markdown,json,notion,obsidian",
+    ),
 ):
     """End-to-end: collect → summarize → export."""
-    collect(since=day, until=day, sources=None)
+    collect(since=day, until=day, days=None, sources=None)
     summarize(day=day, save_digest=False)
     for t in [s.strip() for s in targets.split(",") if s.strip()]:
-        export(target=t, day=day, out=Path("./out"))
+        export(target=t, day=day, week=None, month=None, since=None, until=None, out=None)
 
 
 schedule_app = typer.Typer(help="Install/remove a daily macOS LaunchAgent that runs hindsight.")
