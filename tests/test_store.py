@@ -39,6 +39,28 @@ def test_events_for_day_filters_by_utc(tmp_path):
     assert len(rows) == 2
 
 
+def test_stats_reports_counts_and_range(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    s.upsert_events(
+        [
+            _ev(datetime(2026, 4, 22, 0, 0, tzinfo=timezone.utc), "a", source="claude_code"),
+            _ev(datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc), "b", source="claude_code"),
+            _ev(datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc), "c", source="cursor"),
+        ]
+    )
+    s.save_summary(date(2026, 4, 22), "openai", "x", "content")
+    s.save_rollup(date(2026, 4, 20), date(2026, 4, 26), "openai", "x", "rollup content")
+
+    out = s.stats()
+    assert out["events_total"] == 3
+    assert out["events_per_source"] == {"claude_code": 2, "cursor": 1}
+    assert out["summaries_total"] == 1
+    assert out["rollups_total"] == 1
+    assert out["last_summary_day"] == "2026-04-22"
+    assert out["first_event"].startswith("2026-04-22")
+    assert out["last_event"].startswith("2026-04-23")
+
+
 def test_summary_and_rollup_round_trip(tmp_path):
     s = Store(tmp_path / "t.sqlite")
     s.save_summary(date(2026, 4, 22), "openai", "x", "daily content")

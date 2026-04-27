@@ -89,9 +89,14 @@ Daily summarization uses `SYSTEM_PROMPT`. Rollup uses `ROLLUP_SYSTEM_PROMPT` and
 
 `_resolve_range(--week / --month / --since/--until)` is shared by `rollup` and `export` so the same range syntax works in both places.
 
-## Schedule (macOS launchd)
+## Schedule (macOS launchd / Linux systemd)
 
-`hindsight/schedule.py` writes `~/Library/LaunchAgents/io.github.enkoic.hindsight.plist`, then tries `launchctl bootstrap gui/$UID …` (modern) and falls back to `launchctl load …` (legacy). The plist runs `hindsight run --day yesterday --targets <…>` daily at the configured time and pipes stdout/stderr to `~/Library/Logs/hindsight/`. Linux/systemd is on the roadmap.
+`hindsight/schedule.py` exposes a platform-aware `install()` / `uninstall()` / `show_paths()` triple:
+
+- **macOS**: writes `~/Library/LaunchAgents/io.github.enkoic.hindsight.plist`, tries `launchctl bootstrap gui/$UID …` (modern), falls back to `launchctl load`. Logs go to `~/Library/Logs/hindsight/`.
+- **Linux**: writes `~/.config/systemd/user/hindsight.service` + `hindsight.timer`, then runs `systemctl --user daemon-reload && systemctl --user enable --now hindsight.timer`. Logs go to `~/.local/state/hindsight/` (created up-front because systemd's `append:` doesn't `mkdir -p`).
+
+Both run `hindsight run --day yesterday --targets <…>` daily. The CLI uses the façade (`schedule_mod.install()`) so it works on either OS without branching logic in `cli.py`.
 
 ## What not to put in this repo
 

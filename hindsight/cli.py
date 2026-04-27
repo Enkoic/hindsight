@@ -17,9 +17,10 @@ from .collectors import (
     CodexCollector,
     CodexHistoryCollector,
     CursorCollector,
+    VSCodeCopilotCollector,
 )
 from .exporters import push_to_notion, write_json, write_markdown, write_obsidian
-from .schedule import macos_install, macos_uninstall, plist_path
+from . import schedule as schedule_mod
 from .store import Store
 from .summarizer import (
     build_summarizer,
@@ -38,7 +39,7 @@ def _default_out_dir(cfg) -> Path:
 
 KNOWN_SOURCES = {
     "activitywatch", "claude_code", "claude_history",
-    "codex", "codex_history", "cursor", "chatgpt",
+    "codex", "codex_history", "cursor", "chatgpt", "vscode",
 }
 
 
@@ -69,6 +70,8 @@ def _collectors(cfg) -> list:
     ]
     if cfg.cursor_storage_dir:
         cs.append(CursorCollector(cfg.cursor_storage_dir))
+    if cfg.vscode_storage_dir:
+        cs.append(VSCodeCopilotCollector(cfg.vscode_storage_dir))
     if cfg.chatgpt_export_path:
         cs.append(ChatGPTExportCollector(cfg.chatgpt_export_path))
     return cs
@@ -124,6 +127,35 @@ def collect(
         for k, v in totals.items():
             table.add_row(k, str(v))
         console.print(table)
+    finally:
+        store.close()
+
+
+@app.command()
+def stats():
+    """Show what's in the local store: per-source counts, time span, cached summaries."""
+    cfg = config_mod.load()
+    store = Store(cfg.db_path)
+    try:
+        s = store.stats()
+        size_mb = cfg.db_path.stat().st_size / 1024 / 1024 if cfg.db_path.exists() else 0
+        console.print(f"[bold]Store[/bold]: {cfg.db_path}  ({size_mb:.1f} MB)")
+        console.print(
+            f"  range: {s['first_event'] or '—'}  …  {s['last_event'] or '—'}"
+        )
+        console.print(f"  events: [green]{s['events_total']}[/green] total")
+
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        for src, n in sorted(s["events_per_source"].items(), key=lambda kv: -kv[1]):
+            table.add_row(f"  {src}", str(n))
+        console.print(table)
+
+        console.print(
+            f"  summaries cached: [cyan]{s['summaries_total']}[/cyan] "
+            f"(latest day: {s['last_summary_day'] or '—'})"
+        )
+        console.print(f"  rollups cached:   [cyan]{s['rollups_total']}[/cyan]")
+        console.print(f"  provider/model:   {cfg.llm_provider}/{cfg.llm_model}")
     finally:
         store.close()
 
@@ -386,7 +418,9 @@ def run(
         export(target=t, day=day, week=None, month=None, since=None, until=None, out=None)
 
 
-schedule_app = typer.Typer(help="Install/remove a daily macOS LaunchAgent that runs hindsight.")
+schedule_app = typer.Typer(
+    help="Install/remove a daily scheduled run (macOS launchd or Linux systemd --user)."
+)
 app.add_typer(schedule_app, name="schedule")
 
 
@@ -396,26 +430,32 @@ def schedule_install(
     minute: int = typer.Option(0, help="Minute (0-59)."),
     targets: str = typer.Option("markdown", help="Export targets passed to `hindsight run`."),
 ):
-    """Install a macOS LaunchAgent that runs `hindsight run --day yesterday` daily."""
-    p = macos_install(hour=hour, minute=minute, targets=targets)
-    console.print(f"[green]installed[/green] {p}")
-    console.print("Run `launchctl list | grep hindsight` to verify.")
+    """Install the platform's scheduler. macOS → launchd plist, Linux → systemd --user timer."""
+    info = schedule_mod.install(hour=hour, minute=minute, targets=targets)
+    console.print(f"[green]installed[/green] {info.primary}")
+    for extra in info.extras:
+        console.print(f"  + {extra}")
+    if info.platform == "darwin":
+        console.print("Verify with `launchctl list | grep hindsight`.")
+    else:
+        console.print("Verify with `systemctl --user list-timers hindsight.timer`.")
 
 
 @schedule_app.command("uninstall")
 def schedule_uninstall():
-    """Remove the LaunchAgent."""
-    p = macos_uninstall()
-    if p:
-        console.print(f"[green]removed[/green] {p}")
-    else:
-        console.print("[yellow]no LaunchAgent installed[/yellow]")
+    """Remove the scheduled run."""
+    info = schedule_mod.uninstall()
+    if not info:
+        console.print("[yellow]no schedule installed[/yellow]")
+        return
+    console.print(f"[green]removed[/green] {info.primary}")
 
 
 @schedule_app.command("show")
 def schedule_show():
-    """Print the LaunchAgent plist path."""
-    console.print(str(plist_path()))
+    """Print the path(s) the scheduler writes to on this platform."""
+    for p in schedule_mod.show_paths():
+        console.print(str(p))
 
 
 if __name__ == "__main__":

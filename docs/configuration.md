@@ -16,6 +16,7 @@ All configuration is read from environment variables (or a `.env` file in the cw
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Claude Code transcripts root |
 | `CODEX_SESSIONS_DIR` | `~/.codex/sessions` | Codex CLI rollouts root |
 | `CURSOR_STORAGE_DIR` | `~/Library/Application Support/Cursor/User/workspaceStorage` (macOS only) | Cursor `state.vscdb` per-workspace dir |
+| `CODE_STORAGE_DIR` | auto: macOS `~/Library/Application Support/{Code,Code - Insiders,VSCodium}/User/workspaceStorage`; Linux `~/.config/{...}/User/workspaceStorage` | VS Code Copilot Chat workspaceStorage |
 | `CHATGPT_EXPORT_PATH` | — | path to the unzipped data export folder, or directly to `conversations.json` |
 | `NOTION_TOKEN` | — | Notion internal-integration secret |
 | `NOTION_DATABASE_ID` | — | target Notion database |

@@ -48,6 +48,7 @@ class Config:
     notion_database_id: str | None
     obsidian_vault_dir: Path | None
     cursor_storage_dir: Path | None
+    vscode_storage_dir: Path | None
     chatgpt_export_path: Path | None
     db_path: Path
 
@@ -61,6 +62,22 @@ def _default_cursor_dir() -> Path | None:
     if os.uname().sysname == "Darwin":
         p = Path.home() / "Library" / "Application Support" / "Cursor" / "User" / "workspaceStorage"
         return p if p.exists() else None
+    return None
+
+
+def _default_vscode_dir() -> Path | None:
+    if os.uname().sysname == "Darwin":
+        for app in ("Code", "Code - Insiders", "VSCodium"):
+            p = Path.home() / "Library" / "Application Support" / app / "User" / "workspaceStorage"
+            if p.exists():
+                return p
+        return None
+    # Linux
+    base = Path.home() / ".config"
+    for app in ("Code", "Code - Insiders", "VSCodium"):
+        p = base / app / "User" / "workspaceStorage"
+        if p.exists():
+            return p
     return None
 
 
@@ -86,6 +103,7 @@ def load() -> Config:
         notion_database_id=os.getenv("NOTION_DATABASE_ID") or None,
         obsidian_vault_dir=_opt_path("OBSIDIAN_VAULT_DIR"),
         cursor_storage_dir=_opt_path("CURSOR_STORAGE_DIR") or _default_cursor_dir(),
+        vscode_storage_dir=_opt_path("CODE_STORAGE_DIR") or _default_vscode_dir(),
         chatgpt_export_path=_opt_path("CHATGPT_EXPORT_PATH"),
         db_path=db_path,
     )

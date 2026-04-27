@@ -21,6 +21,7 @@ Personal activity is fragmented across many tools. Each one has its own log form
 | Codex CLI — sessions | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | session rollouts |
 | Codex CLI — history | `~/.codex/history.jsonl` | every prompt you typed |
 | Cursor IDE | `~/Library/Application Support/Cursor/User/workspaceStorage/*/state.vscdb` | per-workspace `aiService.generations` + composer threads |
+| VS Code Copilot Chat | `~/Library/Application Support/Code/User/workspaceStorage/*/state.vscdb` | `interactive.sessions` + `inlineChat.history` (auto-detects Code-Insiders / VSCodium) |
 | ChatGPT export | `<export>/conversations.json` | OpenAI data-export conversations (point at the unzipped folder) |
 | _(pluggable)_ | your collector | subclass `Collector` |
 
@@ -78,15 +79,28 @@ hindsight rollup --since 2026-04-20 --until 2026-04-26
 hindsight rollup --week 2026-W17 --fill-missing    # auto-summarize any uncached day in range first
 ```
 
-### Run on a daily schedule (macOS)
+### Run on a daily schedule (macOS or Linux)
 
 ```bash
 hindsight schedule install --hour 23 --minute 0 --targets markdown,obsidian
-hindsight schedule show       # prints the LaunchAgent plist path
+hindsight schedule show       # prints the unit/plist path(s) for this platform
 hindsight schedule uninstall
 ```
 
-`schedule install` writes a launchd plist at `~/Library/LaunchAgents/io.github.enkoic.hindsight.plist` that runs `hindsight run --day yesterday` daily. Logs land in `~/Library/Logs/hindsight/`.
+The CLI auto-detects the platform:
+
+- **macOS**: writes `~/Library/LaunchAgents/io.github.enkoic.hindsight.plist`, then `launchctl bootstrap`s it. Logs land in `~/Library/Logs/hindsight/`.
+- **Linux**: writes `~/.config/systemd/user/hindsight.{service,timer}` and runs `systemctl --user enable --now hindsight.timer`. Logs land in `~/.local/state/hindsight/`.
+
+Both paths run `hindsight run --day yesterday --targets <…>` once a day.
+
+### Inspect what's in the store
+
+```bash
+hindsight stats
+```
+
+Shows total events per source, time span, cached summary/rollup counts, current provider/model — useful before deciding whether to run a fresh `summarize` or `rollup`.
 
 ## Notion setup
 
@@ -157,12 +171,14 @@ The data dir is created with mode `0700` and the DB file with `0600` — raw tra
 ## Roadmap
 
 - [x] Cursor IDE chat collector
+- [x] VS Code Copilot Chat collector (works on Code, Code-Insiders, VSCodium)
 - [x] ChatGPT export (`conversations.json`) collector
 - [x] Weekly / monthly rollup summaries
 - [x] Obsidian exporter
-- [x] Daily-cron mode (macOS launchd via `hindsight schedule`)
-- [ ] VS Code Copilot chat collector
-- [ ] Linux/systemd schedule helper
+- [x] Daily-schedule mode (macOS launchd + Linux systemd `--user` via `hindsight schedule`)
+- [x] `hindsight stats` for store inspection
+- [ ] Slack / Discord chat exporter
+- [ ] On-the-fly redaction filters (regex strip secrets before they reach the LLM)
 
 ## License
 

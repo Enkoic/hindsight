@@ -176,3 +176,27 @@ class Store:
         )
         row = cur.fetchone()
         return row["content"] if row else None
+
+    def stats(self) -> dict:
+        c = self._conn
+        per_source = {
+            r["source"]: r["n"]
+            for r in c.execute("SELECT source, COUNT(*) AS n FROM events GROUP BY source")
+        }
+        first = c.execute("SELECT MIN(ts_start) AS m FROM events").fetchone()["m"]
+        last = c.execute("SELECT MAX(ts_start) AS m FROM events").fetchone()["m"]
+        n_events = c.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
+        n_summaries = c.execute("SELECT COUNT(*) AS n FROM summaries").fetchone()["n"]
+        n_rollups = c.execute("SELECT COUNT(*) AS n FROM rollups").fetchone()["n"]
+        last_summary = c.execute(
+            "SELECT MAX(day) AS m FROM summaries"
+        ).fetchone()["m"]
+        return {
+            "events_total": n_events,
+            "events_per_source": per_source,
+            "first_event": first,
+            "last_event": last,
+            "summaries_total": n_summaries,
+            "last_summary_day": last_summary,
+            "rollups_total": n_rollups,
+        }
