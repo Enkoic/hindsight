@@ -57,10 +57,11 @@ hindsight report --day today
 hindsight summarize --day today
 
 # 4. export
-hindsight export markdown --day today      # ./out/2026-04-22.md
-hindsight export json     --day today      # ./out/2026-04-22.json
+hindsight export markdown --day today      # <data-dir>/exports/2026-04-22.md
+hindsight export json     --day today      # <data-dir>/exports/2026-04-22.json
 hindsight export notion   --day today      # new page in your Notion DB
 hindsight export obsidian --day today      # daily note in your Obsidian vault
+hindsight export webhook  --day today      # POST to a Slack/Discord incoming webhook
 
 # one-shot: collect → summarize → export markdown
 hindsight run --day today --targets markdown,notion
@@ -101,6 +102,32 @@ hindsight stats
 ```
 
 Shows total events per source, time span, cached summary/rollup counts, current provider/model — useful before deciding whether to run a fresh `summarize` or `rollup`.
+
+### Redaction (privacy before LLM)
+
+`summarize` and `rollup` strip API keys, JWTs, bearer tokens, private IPs, emails, and `sshpass -p <secret>` from the digest *before* it hits the LLM. Defaults cover OpenAI / Anthropic / Volcengine Ark / GitHub / AWS / Slack / Google API keys and JWTs. Add your own:
+
+```bash
+# rules.tsv  — name<TAB>regex<TAB>placeholder
+project_codename<TAB>Project Apollo<TAB><PROJECT>
+internal_host<TAB>\bhost\d+\.corp\.internal\b<TAB><INTERNAL_HOST>
+```
+
+```bash
+HINDSIGHT_REDACT_FILE=./rules.tsv hindsight summarize --day today
+```
+
+The store keeps raw transcripts intact — redaction only applies to what we send to the LLM. Disable per-call with `--no-redact`.
+
+### Purge / clean up the store
+
+```bash
+hindsight purge --older-than 90 --yes              # drop events ts > 90d ago
+hindsight purge --source cursor --yes              # forget one source entirely
+hindsight purge --older-than 30 --source codex --yes
+```
+
+Cached daily summaries and rollups are kept; only raw events are removed. `VACUUM` runs after delete unless you pass `--no-vacuum`.
 
 ## Notion setup
 
@@ -177,8 +204,11 @@ The data dir is created with mode `0700` and the DB file with `0600` — raw tra
 - [x] Obsidian exporter
 - [x] Daily-schedule mode (macOS launchd + Linux systemd `--user` via `hindsight schedule`)
 - [x] `hindsight stats` for store inspection
-- [ ] Slack / Discord chat exporter
-- [ ] On-the-fly redaction filters (regex strip secrets before they reach the LLM)
+- [x] Slack / Discord webhook exporter
+- [x] Regex-based redaction filter (default + user-extensible) for digest payloads
+- [x] `hindsight purge` for store maintenance
+- [ ] Auto-detect & unzip ChatGPT export ZIP
+- [ ] Linear / Jira activity collector
 
 ## License
 

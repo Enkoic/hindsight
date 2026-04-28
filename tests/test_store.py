@@ -61,6 +61,40 @@ def test_stats_reports_counts_and_range(tmp_path):
     assert out["last_event"].startswith("2026-04-23")
 
 
+def test_purge_by_age(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    s.upsert_events(
+        [
+            _ev(datetime(2026, 1, 1, tzinfo=timezone.utc), "old"),
+            _ev(datetime(2026, 4, 22, tzinfo=timezone.utc), "new"),
+        ]
+    )
+    out = s.purge(before=date(2026, 4, 1))
+    assert out["deleted"] == 1
+    rows = s.events_for_day(date(2026, 4, 22))
+    assert len(rows) == 1
+
+
+def test_purge_by_source(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    ts = datetime(2026, 4, 22, tzinfo=timezone.utc)
+    s.upsert_events([_ev(ts, "a", source="cursor"), _ev(ts, "b", source="claude_code")])
+    out = s.purge(sources=["cursor"])
+    assert out["deleted"] == 1
+    remaining = [r["source"] for r in s.events_for_day(date(2026, 4, 22))]
+    assert remaining == ["claude_code"]
+
+
+def test_purge_requires_a_filter(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    try:
+        s.purge()
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised, "no-arg purge must raise"
+
+
 def test_summary_and_rollup_round_trip(tmp_path):
     s = Store(tmp_path / "t.sqlite")
     s.save_summary(date(2026, 4, 22), "openai", "x", "daily content")

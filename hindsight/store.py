@@ -177,6 +177,38 @@ class Store:
         row = cur.fetchone()
         return row["content"] if row else None
 
+    def purge(
+        self,
+        before: date | None = None,
+        sources: list[str] | None = None,
+    ) -> dict:
+        """Delete events matching filters. Returns row counts before/after.
+        At least one filter must be passed; no-arg purge is intentionally rejected.
+        """
+        if before is None and not sources:
+            raise ValueError("purge requires at least one filter (before or sources)")
+        before_n = self._conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
+
+        where = []
+        params: list = []
+        if before is not None:
+            where.append("ts_start < ?")
+            params.append(
+                datetime.combine(before, time.min, tzinfo=timezone.utc).isoformat()
+            )
+        if sources:
+            where.append("source IN ({})".format(",".join("?" * len(sources))))
+            params.extend(sources)
+        sql = f"DELETE FROM events WHERE {' AND '.join(where)}"
+
+        with self.tx() as c:
+            c.execute(sql, params)
+        after_n = self._conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
+        return {"before": before_n, "after": after_n, "deleted": before_n - after_n}
+
+    def vacuum(self) -> None:
+        self._conn.execute("VACUUM")
+
     def stats(self) -> dict:
         c = self._conn
         per_source = {

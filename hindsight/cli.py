@@ -19,8 +19,15 @@ from .collectors import (
     CursorCollector,
     VSCodeCopilotCollector,
 )
-from .exporters import push_to_notion, write_json, write_markdown, write_obsidian
+from .exporters import (
+    push_to_notion,
+    push_to_webhook,
+    write_json,
+    write_markdown,
+    write_obsidian,
+)
 from . import schedule as schedule_mod
+from .redact import redact, rules_from_env
 from .store import Store
 from .summarizer import (
     build_summarizer,
@@ -132,6 +139,49 @@ def collect(
 
 
 @app.command()
+def purge(
+    older_than: Optional[int] = typer.Option(
+        None, help="Delete events with ts_start older than N days ago."
+    ),
+    source: Optional[str] = typer.Option(
+        None, help="Comma-separated source name(s) to delete (in addition to --older-than if given)."
+    ),
+    vacuum: bool = typer.Option(True, help="Run VACUUM after delete to reclaim disk."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+):
+    """Delete old or unwanted events from the local store. Cached summaries are kept."""
+    if older_than is None and not source:
+        console.print("[red]must pass at least one of --older-than or --source[/red]")
+        raise typer.Exit(2)
+    cfg = config_mod.load()
+    before_day = (
+        (datetime.now(timezone.utc) - timedelta(days=older_than)).date()
+        if older_than is not None
+        else None
+    )
+    sources = [s.strip() for s in source.split(",")] if source else None
+    if not yes:
+        msg = f"Will delete events"
+        if before_day:
+            msg += f" before {before_day}"
+        if sources:
+            msg += f" from sources={sources}"
+        console.print(f"[yellow]{msg}.  Confirm with --yes.[/yellow]")
+        raise typer.Exit(1)
+    store = Store(cfg.db_path)
+    try:
+        out = store.purge(before=before_day, sources=sources)
+        if vacuum:
+            store.vacuum()
+        console.print(
+            f"[green]deleted[/green] {out['deleted']} events "
+            f"({out['before']} → {out['after']})"
+        )
+    finally:
+        store.close()
+
+
+@app.command()
 def stats():
     """Show what's in the local store: per-source counts, time span, cached summaries."""
     cfg = config_mod.load()
@@ -190,6 +240,10 @@ def report(day: Optional[str] = typer.Option(None, help="ISO date. Default: toda
 def summarize(
     day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
     save_digest: bool = typer.Option(False, help="Print the raw digest (no LLM)."),
+    redact_secrets: bool = typer.Option(
+        True, "--redact/--no-redact",
+        help="Strip API keys / emails / private IPs / JWTs from the digest before LLM call.",
+    ),
 ):
     """Run the LLM summarizer over a day's events and cache the result."""
     cfg = config_mod.load()
@@ -198,6 +252,10 @@ def summarize(
     try:
         rows = store.events_for_day(d)
         digest = render_digest(rows, d)
+        if redact_secrets:
+            digest, hits = redact(digest, rules_from_env())
+            if hits:
+                console.print(f"[yellow]redacted[/yellow] {dict(hits)}")
         if save_digest:
             console.print(digest)
             return
@@ -250,11 +308,16 @@ def rollup(
     fill_missing: bool = typer.Option(
         False, help="Auto-summarize any day in range that doesn't have a cached summary yet."
     ),
+    redact_secrets: bool = typer.Option(
+        True, "--redact/--no-redact",
+        help="Strip API keys / emails / private IPs / JWTs from inputs before LLM call.",
+    ),
 ):
     """Synthesize a multi-day rollup from cached daily summaries."""
     cfg = config_mod.load()
     start, end = _resolve_range(since, until, week, month)
     store = Store(cfg.db_path)
+    rules = rules_from_env()
     try:
         if fill_missing:
             summarizer = build_summarizer(cfg)
@@ -265,6 +328,8 @@ def rollup(
                     if rows:
                         console.print(f"[cyan]filling[/cyan] {day} ({len(rows)} events)")
                         digest = render_digest(rows, day)
+                        if redact_secrets:
+                            digest, _ = redact(digest, rules)
                         out = summarizer.summarize(digest, day)
                         store.save_summary(day, summarizer.provider, summarizer.model, out)
                 day += timedelta(days=1)
@@ -282,6 +347,17 @@ def rollup(
             f"[cyan]Rollup {start} .. {end}[/cyan] — {len(dailies)} daily summaries → "
             f"{summarizer.provider}/{summarizer.model}"
         )
+        if redact_secrets:
+            redacted: list[tuple] = []
+            total_hits: dict[str, int] = {}
+            for d, content in dailies:
+                rc, hits = redact(content, rules)
+                redacted.append((d, rc))
+                for k, n in hits.items():
+                    total_hits[k] = total_hits.get(k, 0) + n
+            if total_hits:
+                console.print(f"[yellow]redacted[/yellow] {total_hits}")
+            dailies = redacted
         out = summarize_rollup(summarizer, dailies, start, end)
         store.save_rollup(start, end, summarizer.provider, summarizer.model, out)
         console.print(out)
@@ -291,7 +367,7 @@ def rollup(
 
 @app.command()
 def export(
-    target: str = typer.Argument(..., help="markdown | json | notion | obsidian"),
+    target: str = typer.Argument(..., help="markdown | json | notion | obsidian | webhook"),
     day: Optional[str] = typer.Option(None, help="ISO date. Default: today."),
     week: Optional[str] = typer.Option(None, help="Export a cached rollup for this ISO week."),
     month: Optional[str] = typer.Option(None, help="Export a cached rollup for this month."),
@@ -361,6 +437,12 @@ def export(
                 cfg.obsidian_vault_dir, label, content, subfolder=subfolder, tag=tag
             )
             console.print(f"[green]wrote[/green] {path}")
+        elif target == "webhook":
+            if not cfg.webhook_url:
+                console.print("[red]HINDSIGHT_WEBHOOK_URL required (Slack/Discord).[/red]")
+                raise typer.Exit(1)
+            url = push_to_webhook(cfg.webhook_url, label, content)
+            console.print(f"[green]posted[/green] {url}")
         else:
             console.print(f"[red]Unknown target: {target}[/red]")
             raise typer.Exit(2)

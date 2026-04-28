@@ -98,6 +98,18 @@ Daily summarization uses `SYSTEM_PROMPT`. Rollup uses `ROLLUP_SYSTEM_PROMPT` and
 
 Both run `hindsight run --day yesterday --targets <…>` daily. The CLI uses the façade (`schedule_mod.install()`) so it works on either OS without branching logic in `cli.py`.
 
+## Redaction
+
+`hindsight/redact.py` defines `DEFAULT_RULES` (Anthropic / OpenAI / Ark / GitHub / AWS / Slack / Google API keys, JWTs, bearer headers, private IPv4, emails, `sshpass -p`). Each rule has a stable placeholder so the LLM still knows *something* was there.
+
+The redactor runs on the **digest** (the prompt we POST to the LLM), not on the events table — keeping raw text in the store is intentional, since you might want to grep for it later. Both `summarize` and `rollup` have `--redact/--no-redact` flags; default is on. Users can extend with `HINDSIGHT_REDACT_FILE=path.tsv` (`name<TAB>regex<TAB>placeholder`); user rules go *first* so they pre-empt defaults.
+
+When a redaction fires, the CLI prints `[yellow]redacted[/yellow] {rule_name: count}` so you can audit what got stripped.
+
+## Maintenance
+
+`hindsight purge` accepts `--older-than DAYS` and/or `--source NAME[,NAME…]`, refuses an unfiltered call, and runs `VACUUM` after the delete (skip with `--no-vacuum`). Cached daily summaries and rollups are *not* touched — they're cheap to keep and let you reconstruct what was deleted from the events. The `--yes` confirmation gate is mandatory.
+
 ## What not to put in this repo
 
 - Raw transcripts: stay in the SQLite DB, never committed.

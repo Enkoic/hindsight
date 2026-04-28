@@ -21,6 +21,8 @@ All configuration is read from environment variables (or a `.env` file in the cw
 | `NOTION_TOKEN` | — | Notion internal-integration secret |
 | `NOTION_DATABASE_ID` | — | target Notion database |
 | `OBSIDIAN_VAULT_DIR` | — | enables `hindsight export obsidian` |
+| `HINDSIGHT_WEBHOOK_URL` | — | Slack/Discord incoming webhook for `hindsight export webhook` |
+| `HINDSIGHT_REDACT_FILE` | — | path to a TSV (`name<TAB>regex<TAB>placeholder`) of extra redaction rules merged before defaults |
 
 ## Filesystem layout
 

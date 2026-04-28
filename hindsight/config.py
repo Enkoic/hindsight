@@ -50,6 +50,7 @@ class Config:
     cursor_storage_dir: Path | None
     vscode_storage_dir: Path | None
     chatgpt_export_path: Path | None
+    webhook_url: str | None
     db_path: Path
 
 
@@ -105,5 +106,6 @@ def load() -> Config:
         cursor_storage_dir=_opt_path("CURSOR_STORAGE_DIR") or _default_cursor_dir(),
         vscode_storage_dir=_opt_path("CODE_STORAGE_DIR") or _default_vscode_dir(),
         chatgpt_export_path=_opt_path("CHATGPT_EXPORT_PATH"),
+        webhook_url=os.getenv("HINDSIGHT_WEBHOOK_URL") or None,
         db_path=db_path,
     )
