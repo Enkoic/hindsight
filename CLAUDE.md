@@ -13,11 +13,12 @@ hindsight/
 ├── cli.py             # typer entry points; one command per pipeline stage
 ├── config.py          # env vars → Config; data dir resolution; 0700/0600 perms
 ├── models.py          # Event + fingerprint
-├── store.py           # 3 tables: events / summaries / rollups
-├── schedule.py        # macOS launchd plist + bootstrap
-├── collectors/{base,activitywatch,claude_code,codex,cursor,chatgpt,history}.py
+├── store.py           # 3 tables: events / summaries / rollups; purge / vacuum / stats
+├── redact.py          # secret-stripping rules applied to the LLM digest
+├── schedule.py        # macOS launchd + Linux systemd --user install/show/uninstall
+├── collectors/{base,activitywatch,claude_code,codex,cursor,vscode,chatgpt,history}.py
 ├── summarizer/llm.py  # render_digest + render_rollup_digest + Anthropic/OpenAI clients
-└── exporters/{markdown,json,notion,obsidian}.py
+└── exporters/{markdown,json_out,notion,obsidian,webhook}.py
 tests/                 # pytest, no network, runs in <0.1s
 docs/                  # architecture / collectors / exporters / configuration
 ```
@@ -49,7 +50,7 @@ Read `docs/collectors.md` for adding a source, `docs/exporters.md` for adding a 
 ## Running tests
 
 ```bash
-pytest -q                          # 19 tests, all offline
+pytest -q                          # 43 tests, all offline
 hindsight summarize --save-digest  # see render_digest output without spending tokens
 ```
 

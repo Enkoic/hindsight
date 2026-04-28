@@ -2,7 +2,7 @@
 
 > *"What did I actually do today? Which AI did I ask for help? What got solved? What's still open?"*
 
-`hindsight` aggregates your daily activity across **ActivityWatch**, **Claude Code**, **Codex CLI**, and other AI-dialog sources into a single local SQLite store, then asks an LLM to turn the raw mess into a readable daily digest. Export to Markdown, JSON, or push straight to a Notion database.
+`hindsight` aggregates your daily activity across **ActivityWatch**, **Claude Code**, **Codex CLI**, and other AI-dialog sources into a single local SQLite store, then asks an LLM to turn the raw mess into a readable daily digest. Export to Markdown, JSON, Notion, Obsidian, or Slack/Discord-compatible webhooks.
 
 ## Why
 
@@ -44,6 +44,18 @@ cp .env.example .env                     # fill in API keys
 - An Anthropic or OpenAI API key for summarization (any OpenAI-compatible endpoint works — DeepSeek, Volcengine Ark, local llama.cpp, etc. via `OPENAI_BASE_URL`)
 - A Notion internal integration token + database id (optional, for Notion export)
 
+## Support status
+
+This project is usable today, but the support level is not identical across platforms:
+
+| Area | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| collect / summarize / export | first-class | supported | not supported yet |
+| schedule install/show/uninstall | `launchd` | `systemd --user` | not supported |
+| auto-detect Cursor / VS Code paths | supported | partially supported | not supported |
+
+If you want Windows support or another source/export target, open an issue with the exact local data format and expected workflow.
+
 ## Usage
 
 ```bash
@@ -68,6 +80,29 @@ hindsight run --day today --targets markdown,notion
 ```
 
 `--day` accepts `today`, `yesterday`, or an ISO date (`2026-04-22`).
+
+### Example output
+
+The summary is meant to be compact and retrospective rather than a raw log dump. A typical output looks like:
+
+```md
+## 概览 / Overview
+今天主要围绕 `hindsight` 的导出链路和调度支持收尾，集中处理了 webhook 导出、Linux 定时任务和文档补齐。
+
+## 时间分布 / Time Breakdown
+- 代码实现与调试：约 3.5 小时
+- 文档与配置整理：约 1 小时
+- AI 对话与排障：约 45 分钟
+
+## 已解决 / Solved
+- 接入 Slack / Discord webhook 导出
+- 为 Linux 增加 `systemd --user` 调度支持
+- 补齐 `.env.example` 与配置文档
+
+## 进行中 / In Progress
+- 优化 ChatGPT export 的导入体验
+- 继续扩充 collector 测试夹具
+```
 
 ### Weekly / monthly rollup
 
@@ -129,6 +164,25 @@ hindsight purge --older-than 30 --source codex --yes
 
 Cached daily summaries and rollups are kept; only raw events are removed. `VACUUM` runs after delete unless you pass `--no-vacuum`.
 
+## Privacy and security model
+
+`hindsight` is intentionally local-first:
+
+- raw transcripts and normalized events stay in a local SQLite DB outside the repo by default
+- the data dir is created with `0700` permissions and the DB file with `0600`
+- LLM calls happen only when you run `summarize` or `rollup`
+- exporters are sinks only: they do not mutate the store or re-run the LLM
+- redaction runs on the digest before it is sent to the LLM; the store keeps the original source text
+
+Network calls are limited to:
+
+- ActivityWatch on `localhost`
+- your configured LLM provider
+- Notion API when you export to Notion
+- Slack/Discord-compatible webhook endpoint when you export to webhook
+
+If you find a privacy leak, missing redaction, unsafe file permission, or another security problem, follow [SECURITY.md](./SECURITY.md) and do not post the raw evidence publicly.
+
 ## Notion setup
 
 1. Create a Notion [internal integration](https://www.notion.so/my-integrations) and copy the secret into `NOTION_TOKEN`.
@@ -148,7 +202,7 @@ summarizer.render_digest()   → compact text the LLM can reason over
     ↓
 Summarizer (Anthropic | OpenAI-compatible)
     ↓
-exporters/{markdown, json, notion}
+exporters/{markdown, json, notion, obsidian, webhook}
 ```
 
 ### The digest step
@@ -180,20 +234,14 @@ class CursorCollector(Collector):
 
 Register it in `collectors/__init__.py` and `cli._collectors()`.
 
-## Privacy
+## Contributing
 
-Everything runs locally. The only network calls are:
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup and contribution conventions.
+- Read [docs/architecture.md](./docs/architecture.md) first if you want the system overview.
+- New collectors and exporters usually only need one file plus CLI/config/docs wiring.
+- Public bug reports should avoid pasting secrets or raw transcripts; use redacted snippets and exact commands instead.
 
-- ActivityWatch HTTP (localhost)
-- Your chosen LLM provider (only when you run `summarize`)
-- Notion API (only when you run `export notion`)
-
-The SQLite DB lives outside the repo by default, in the OS-appropriate data dir:
-
-- macOS: `~/Library/Application Support/hindsight/hindsight.sqlite`
-- Linux: `$XDG_DATA_HOME/hindsight/` or `~/.local/share/hindsight/`
-
-The data dir is created with mode `0700` and the DB file with `0600` — raw transcripts are treated as private. `./out/` (Markdown exports) and `.env` are in `.gitignore`. Override the DB path with `HINDSIGHT_DB=/some/path.sqlite`.
+The repository includes GitHub issue templates, a pull request template, and CI for `pytest -q` plus `ruff check`.
 
 ## Roadmap
 

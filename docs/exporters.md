@@ -50,7 +50,7 @@ def push_to_anki(deck: str, day, content: str) -> str:
 
 - **Notion** has a 100-blocks-per-page limit on the create call; `notion.py` already chunks the body via a follow-up `PATCH`. If you add new block types, keep the per-block 1900-char rich-text cap (`MAX_BLOCK_CHARS`).
 - **Obsidian** is just file IO, but Daily Notes plugin expects `YYYY-MM-DD.md` exactly — don't prefix the filename, use a subfolder.
-- **Anything that re-renders Markdown** (Discord, Slack) — strip `## 概览 / Overview` style headings, those don't look right in a chat message. Keep the digest as-is for archive sinks (Notion/Obsidian/Markdown), summarize harder for chat sinks.
+- **Slack / Discord webhook** (`exporters/webhook.py`) — auto-detects the platform from the URL host and chunks under each limit (Discord 1900, Slack 3500), preferring newline boundaries. Long continuous text falls back to a hard cut. The summary's `## 概览 / Overview` headers do render as Slack mrkdwn / Discord markdown, just not as nicely as in Notion or Obsidian; for noisy channels, route a redacted summary or short rollup instead.
 
 ## What an exporter must NOT do
 

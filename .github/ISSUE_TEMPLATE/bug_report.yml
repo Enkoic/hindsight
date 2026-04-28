@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a reproducible defect in collection, summarization, export, or scheduling.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please avoid pasting private transcripts, secrets, or raw activity logs.
+        Redacted command output and digest snippets are usually enough.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the bug and why it is incorrect.
+      placeholder: hindsight export webhook fails against Slack-compatible endpoints with...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Exact commands, flags, and steps to reproduce.
+      placeholder: |
+        1. hindsight collect --sources codex --days 1
+        2. hindsight summarize --day yesterday --no-redact
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: Expected result
+      placeholder: A summary should be cached and printed.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include traceback or terminal output if relevant, but redact secrets.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.9"
+  - type: input
+    id: provider_model
+    attributes:
+      label: Provider / model
+      description: If relevant to the bug.
+      placeholder: openai / deepseek-v3-2-251201
+  - type: input
+    id: sources
+    attributes:
+      label: Sources involved
+      description: Comma-separated source names if this is a collect/report/rendering problem.
+      placeholder: codex,cursor,vscode
+  - type: textarea
+    id: notes
+    attributes:
+      label: Extra context
+      description: Any other detail that would help narrow it down.

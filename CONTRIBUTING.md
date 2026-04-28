@@ -9,7 +9,7 @@ git clone https://github.com/Enkoic/hindsight.git
 cd hindsight
 uv venv && source .venv/bin/activate
 uv pip install -e '.[dev]'         # pulls pytest + ruff
-cp .env.example .env                # set at least one API key for summarizer tests
+cp .env.example .env                # optional; only needed for manual summarize/export flows
 ```
 
 > **macOS quirk**: the editable-install marker `_editable_impl_hindsight.pth` sometimes inherits the `UF_HIDDEN` flag inside Apple sandboxes, which makes Python's `site` module skip it. If `hindsight: command not found` after `pip install -e .`, run `chflags nohidden .venv/lib/python*/site-packages/*.pth` or use `pip install .` (non-editable).
@@ -22,10 +22,11 @@ hindsight/
 ├── config.py          # env-var → Config dataclass
 ├── models.py          # Event schema + fingerprint
 ├── store.py           # SQLite (events, summaries, rollups)
-├── schedule.py        # macOS launchd glue
+├── redact.py          # secret redaction before LLM calls
+├── schedule.py        # macOS launchd + Linux systemd --user glue
 ├── collectors/        # one per data source — see docs/collectors.md
 ├── summarizer/        # render_digest + LLM clients — see docs/architecture.md
-└── exporters/         # markdown / json / notion / obsidian — see docs/exporters.md
+└── exporters/         # markdown / json / notion / obsidian / webhook — see docs/exporters.md
 tests/                 # pytest, no external services touched
 docs/                  # design rationale + extension guides
 ```
@@ -33,7 +34,7 @@ docs/                  # design rationale + extension guides
 ## Workflow
 
 ```bash
-pytest -q                              # 19 tests, runs in <0.1s
+pytest -q                              # 43 tests, all offline
 ruff check hindsight tests             # if you want lint
 hindsight collect --days 1             # smoke pull from your real machine
 hindsight summarize --day yesterday --save-digest   # see prompt without spending tokens

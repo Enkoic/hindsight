@@ -22,9 +22,6 @@ from .collectors import (
 from .exporters import (
     push_to_notion,
     push_to_webhook,
-    write_json,
-    write_markdown,
-    write_obsidian,
 )
 from . import schedule as schedule_mod
 from .redact import redact, rules_from_env
@@ -161,7 +158,7 @@ def purge(
     )
     sources = [s.strip() for s in source.split(",")] if source else None
     if not yes:
-        msg = f"Will delete events"
+        msg = "Will delete events"
         if before_day:
             msg += f" before {before_day}"
         if sources:
