@@ -34,7 +34,7 @@ docs/                  # design rationale + extension guides
 ## Workflow
 
 ```bash
-pytest -q                              # 43 tests, all offline
+pytest -q                              # 60 tests, all offline
 ruff check hindsight tests             # if you want lint
 hindsight collect --days 1             # smoke pull from your real machine
 hindsight summarize --day yesterday --save-digest   # see prompt without spending tokens

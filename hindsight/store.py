@@ -209,6 +209,33 @@ class Store:
     def vacuum(self) -> None:
         self._conn.execute("VACUUM")
 
+    def all_summaries(
+        self, provider: str, model: str, limit: int | None = None
+    ) -> list[tuple[date, str]]:
+        sql = (
+            "SELECT day, content FROM summaries "
+            "WHERE provider = ? AND model = ? ORDER BY day DESC"
+        )
+        params: list = [provider, model]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        cur = self._conn.execute(sql, params)
+        return [(date.fromisoformat(r["day"]), r["content"]) for r in cur.fetchall()]
+
+    def all_rollups(
+        self, provider: str, model: str
+    ) -> list[tuple[date, date, str]]:
+        cur = self._conn.execute(
+            "SELECT start_day, end_day, content FROM rollups "
+            "WHERE provider = ? AND model = ? ORDER BY end_day DESC",
+            (provider, model),
+        )
+        return [
+            (date.fromisoformat(r["start_day"]), date.fromisoformat(r["end_day"]), r["content"])
+            for r in cur.fetchall()
+        ]
+
     def stats(self) -> dict:
         c = self._conn
         per_source = {

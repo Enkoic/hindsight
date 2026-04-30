@@ -20,7 +20,7 @@ Personal activity is fragmented across many tools. Each one has its own log form
 | Claude Code — history | `~/.claude/history.jsonl` | every prompt you typed (project-tagged) |
 | Codex CLI — sessions | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | session rollouts |
 | Codex CLI — history | `~/.codex/history.jsonl` | every prompt you typed |
-| Cursor IDE | `~/Library/Application Support/Cursor/User/workspaceStorage/*/state.vscdb` | per-workspace `aiService.generations` + composer threads |
+| Cursor IDE | `~/Library/Application Support/Cursor/User/workspaceStorage/*/state.vscdb` + `globalStorage/state.vscdb` | per-workspace prompts + global `cursorDiskKV` bubbles (full user + assistant turns) |
 | VS Code Copilot Chat | `~/Library/Application Support/Code/User/workspaceStorage/*/state.vscdb` | `interactive.sessions` + `inlineChat.history` (auto-detects Code-Insiders / VSCodium) |
 | ChatGPT export | `<export>/conversations.json` | OpenAI data-export conversations (point at the unzipped folder) |
 | _(pluggable)_ | your collector | subclass `Collector` |
@@ -137,6 +137,25 @@ hindsight stats
 ```
 
 Shows total events per source, time span, cached summary/rollup counts, current provider/model — useful before deciding whether to run a fresh `summarize` or `rollup`.
+
+### Ask questions over your history
+
+```bash
+hindsight ask "上周还有哪些待办没解决，按紧急度排序"
+hindsight ask "What did I solve on 2026-04-22?"
+hindsight ask "When did I first start the theme project?"
+```
+
+`ask` uses your cached daily summaries and rollups as evidence (no extra LLM calls to re-summarize). Dates referenced in the question (`2026-04-22`) get pinned to the front of the context so they always survive the budget trim.
+
+### Diagnose your setup
+
+```bash
+hindsight doctor                    # also pings the LLM (~5 tokens)
+hindsight doctor --no-ping          # skip the LLM probe
+```
+
+Walks every collector path, every exporter config, store integrity & permissions, scheduler state, and redact rules — printing a status table so you can see what's wired up at a glance.
 
 ### Redaction (privacy before LLM)
 

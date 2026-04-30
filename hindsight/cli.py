@@ -24,6 +24,8 @@ from .exporters import (
     push_to_webhook,
 )
 from . import schedule as schedule_mod
+from .doctor import run_checks
+from .qa import ask as qa_ask
 from .redact import redact, rules_from_env
 from .store import Store
 from .summarizer import (
@@ -174,6 +176,67 @@ def purge(
             f"[green]deleted[/green] {out['deleted']} events "
             f"({out['before']} → {out['after']})"
         )
+    finally:
+        store.close()
+
+
+@app.command()
+def doctor(
+    ping_llm: bool = typer.Option(
+        True, "--ping/--no-ping", help="Send a tiny LLM probe to verify keys (costs ~5 tokens)."
+    ),
+):
+    """Diagnose collector reachability, LLM access, exporters, scheduler, and store integrity."""
+    cfg = config_mod.load()
+    checks = run_checks(cfg, ping_llm=ping_llm)
+
+    icon = {"ok": "[green]✓[/green]", "warn": "[yellow]⚠[/yellow]",
+            "fail": "[red]✗[/red]", "skip": "[dim]–[/dim]"}
+    table = Table(title="hindsight doctor")
+    table.add_column("area", style="cyan")
+    table.add_column("name")
+    table.add_column("status", justify="center")
+    table.add_column("detail", overflow="fold")
+    counts: dict[str, int] = {}
+    for c in checks:
+        counts[c.status] = counts.get(c.status, 0) + 1
+        table.add_row(c.area, c.name, icon[c.status], c.detail)
+    console.print(table)
+    summary = "  ".join(f"{icon[k]} {n}" for k, n in counts.items() if n)
+    console.print(summary)
+    # exit 1 if any fail
+    if counts.get("fail"):
+        raise typer.Exit(1)
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help='Question in quotes, e.g. "What did I solve last week?"'),
+    days: Optional[int] = typer.Option(
+        None,
+        help="Limit context to summaries from the last N days (default: as many as fit in --budget).",
+    ),
+    budget: int = typer.Option(80000, help="Max chars of digest context sent to the LLM."),
+):
+    """Ask a natural-language question against your cached daily/weekly summaries."""
+    cfg = config_mod.load()
+    store = Store(cfg.db_path)
+    try:
+        summaries = store.all_summaries(cfg.llm_provider, cfg.llm_model, limit=days)
+        rollups = store.all_rollups(cfg.llm_provider, cfg.llm_model)
+        if not summaries and not rollups:
+            console.print(
+                "[red]No cached summaries. Run `hindsight summarize --day yesterday` first.[/red]"
+            )
+            raise typer.Exit(1)
+
+        summarizer = build_summarizer(cfg)
+        console.print(
+            f"[cyan]Asking via {summarizer.provider}/{summarizer.model}[/cyan] — "
+            f"context: {len(summaries)} daily + {len(rollups)} rollup summaries"
+        )
+        out = qa_ask(summarizer, summaries, rollups, question, char_budget=budget)
+        console.print(out)
     finally:
         store.close()
 

@@ -10,6 +10,9 @@ The format is intentionally simple and follows the spirit of Keep a Changelog.
 
 - GitHub Actions CI for `pytest -q` and `ruff check` on Python 3.10 to 3.12.
 - Community files for security reporting, code of conduct, issue templates, and pull request hygiene.
+- `hindsight ask "<question>"` — RAG-style QA over cached daily and rollup summaries; pins date references in the question to the front of the context, trims the rest to a configurable budget.
+- `hindsight doctor` — one-shot diagnostic of collector reachability, store integrity & permissions, LLM key validity (`--no-ping` to skip cost), Notion/Obsidian/webhook config, scheduled run state, and redaction rule compile.
+- Cursor bubble-level collector — extends the per-workspace prompt collector with global `cursorDiskKV` mining so both user and assistant turns are captured (was only prompts before). Falls back through `timingInfo.clientRpcSendTime` → `clientStartTime/EndTime` → `createdAt` ISO → top-level `timestamp` for time resolution.
 
 ### Changed
 

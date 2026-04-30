@@ -50,7 +50,7 @@ Read `docs/collectors.md` for adding a source, `docs/exporters.md` for adding a 
 ## Running tests
 
 ```bash
-pytest -q                          # 43 tests, all offline
+pytest -q                          # 60 tests, all offline
 hindsight summarize --save-digest  # see render_digest output without spending tokens
 ```
 
